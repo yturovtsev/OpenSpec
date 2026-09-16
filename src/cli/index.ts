@@ -222,12 +222,13 @@ program
   .description('Initialize OpenSpec in your project')
   .option('--tools <tools>', toolsOptionDescription)
   .option('--language <language>', 'Write new OpenSpec artifacts in this language')
+  .option('--context-profile <name>', "Record this repository's MCP context profile in the project context")
   .option('--force', 'Auto-cleanup legacy files without prompting')
   .option('--profile <profile>', 'Override global config profile (core or custom)')
   .option('--no-animation', 'Show a static welcome screen instead of the animated one')
   .option('--copilot-cloud', 'Set up GitHub Copilot cloud coding-agent files without prompting')
   .option('--no-copilot-cloud', 'Skip GitHub Copilot cloud coding-agent files without prompting')
-  .action(async (targetPath = '.', options?: { tools?: string; language?: string; force?: boolean; profile?: string; animation?: boolean; copilotCloud?: boolean }) => {
+  .action(async (targetPath = '.', options?: { tools?: string; language?: string; contextProfile?: string; force?: boolean; profile?: string; animation?: boolean; copilotCloud?: boolean }) => {
     try {
       // Validate that the path is a valid directory
       const resolvedPath = path.resolve(targetPath);
@@ -252,6 +253,7 @@ program
       const initCommand = new InitCommand({
         tools: options?.tools,
         language: options?.language,
+        contextProfile: options?.contextProfile,
         force: options?.force,
         profile: options?.profile,
         animation: options?.animation,

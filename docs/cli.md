@@ -92,6 +92,14 @@ Use `--language <language>` to add a language instruction to a new project's
 `openspec/config.yaml`. For an existing project, edit the config's `context`
 field so OpenSpec never overwrites project-specific guidance.
 
+Use `--context-profile <name>` to record which MCP context profile belongs to
+this repository. The profile is written as the last line of the `context` field
+in `openspec/config.yaml`, so agents receive it with every artifact instruction.
+Unlike `--language`, this option also updates a config that already exists — it
+rewrites only the `context` field and leaves comments, `rules`, and every other
+field alone. Re-running with the same profile changes nothing; a different
+profile replaces the recorded line rather than adding a second one.
+
 **Arguments:**
 
 | Argument | Required | Description |
@@ -104,6 +112,7 @@ field so OpenSpec never overwrites project-specific guidance.
 |--------|-------------|
 | `--tools <list>` | Configure AI tools non-interactively. Use `all`, `none`, or comma-separated list |
 | `--language <language>` | Write artifacts in this language when creating a new config |
+| `--context-profile <name>` | Record this repository's MCP context profile in the project context |
 | `--force` | Auto-cleanup legacy files without prompting |
 | `--profile <profile>` | Override global profile for this init run (`core` or `custom`) |
 | `--no-animation` | Show a static welcome screen instead of the animated one |

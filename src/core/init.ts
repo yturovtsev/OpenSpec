@@ -15,8 +15,14 @@ import {
   classifyOpenSpecDir,
   MAX_CONTEXT_SIZE,
   readProjectConfig,
+  resolveConfigFilePath,
   storePointerProblem,
 } from './project-config.js';
+import {
+  applyContextProfile,
+  formatContextProfile,
+  setContextProfileInConfigText,
+} from './context-profile.js';
 import { findRepoPlanningRootSync } from './planning-home.js';
 import { ANCHORED_OPENSPEC_DIRS, ensureDirectoryAnchor } from './openspec-root.js';
 import { getSkillReferenceTransformer, getTransformerForTool, usesNaturalLanguageSkillReferences } from '../utils/command-references.js';
@@ -130,6 +136,8 @@ const WORKFLOW_TO_SKILL_DIR: Record<string, string> = {
 type InitCommandOptions = {
   tools?: string;
   language?: string;
+  /** MCP context profile recorded at the end of the project context. */
+  contextProfile?: string;
   force?: boolean;
   interactive?: boolean;
   profile?: string;
@@ -169,6 +177,7 @@ type DeferredLegacyCleanup = {
 export class InitCommand {
   private readonly toolsArg?: string;
   private readonly language?: string;
+  private readonly contextProfile?: string;
   private readonly force: boolean;
   private readonly interactiveOption?: boolean;
   private readonly profileOverride?: string;
@@ -178,6 +187,7 @@ export class InitCommand {
   constructor(options: InitCommandOptions = {}) {
     this.toolsArg = options.tools;
     this.language = this.normalizeLanguage(options.language);
+    this.contextProfile = this.normalizeContextProfile(options.contextProfile);
     this.force = options.force ?? false;
     this.interactiveOption = options.interactive;
     this.profileOverride = options.profile;
@@ -221,6 +231,7 @@ export class InitCommand {
     }
 
     await this.assertLanguageCanBeApplied(projectPath, openspecPath);
+    await this.assertContextProfileCanBeApplied(projectPath, openspecPath);
 
     // Check for legacy artifacts and handle cleanup
     const deferredLegacyCleanup = await this.handleLegacyCleanup(projectPath, extendMode);
@@ -1068,6 +1079,37 @@ export class InitCommand {
     return normalized;
   }
 
+  private normalizeContextProfile(profile: string | undefined): string | undefined {
+    if (profile === undefined) return undefined;
+
+    const normalized = profile.trim();
+    if (!normalized) {
+      throw new Error('The --context-profile option requires a non-empty value.');
+    }
+    if (/\p{Cc}|\p{Bidi_Control}|[\u200B\u2028\u2029\uFEFF]/u.test(normalized)) {
+      throw new Error(
+        'The --context-profile option must be a single line without control or invisible formatting characters.'
+      );
+    }
+    const serializedContext = `${formatContextProfile(normalized)}\n`;
+    if (Buffer.byteLength(serializedContext, 'utf8') > MAX_CONTEXT_SIZE) {
+      throw new Error(
+        `The --context-profile option is too long for OpenSpec's ${MAX_CONTEXT_SIZE / 1024}KB project context limit.`
+      );
+    }
+    return normalized;
+  }
+
+  /**
+   * The context a freshly created config starts with: the language guidance
+   * (when asked for) with the profile line appended last.
+   */
+  private initialContext(): string | undefined {
+    const language = this.languageContext();
+    if (!this.contextProfile) return language;
+    return applyContextProfile(language, this.contextProfile);
+  }
+
   private languageContext(): string | undefined {
     if (!this.language) return undefined;
     return formatLanguageContext(this.language);
@@ -1107,21 +1149,89 @@ export class InitCommand {
     );
   }
 
-  private async createConfig(openspecPath: string, extendMode: boolean): Promise<'created' | 'exists' | 'skipped'> {
+  /**
+   * Pre-flight for --context-profile, run before the first write so a config
+   * that cannot be read or updated fails an otherwise-successful init early.
+   * Unlike --language, the profile may be recorded into a config that already
+   * exists; what it must never do is replace one it could not parse.
+   */
+  private async assertContextProfileCanBeApplied(
+    projectPath: string,
+    openspecPath: string
+  ): Promise<void> {
+    if (!this.contextProfile) return;
+
+    const existingConfigPath = resolveConfigFilePath(projectPath);
+    const configPath = existingConfigPath ?? path.join(openspecPath, 'config.yaml');
+
+    try {
+      FileSystemUtils.assertProjectArtifactPath(projectPath, configPath);
+    } catch (error) {
+      const reason = error instanceof Error ? `: ${error.message}` : '';
+      throw new Error(`Cannot write openspec/config.yaml for --context-profile${reason}`);
+    }
+
+    if (!(await FileSystemUtils.canWriteFile(configPath))) {
+      throw new Error(
+        'Cannot write openspec/config.yaml for --context-profile: the destination is not writable.'
+      );
+    }
+
+    if (!existingConfigPath) return;
+
+    // Parse now so a malformed config stops the run instead of being
+    // overwritten once generation has already written skills and commands.
+    let content: string;
+    try {
+      content = await fs.promises.readFile(existingConfigPath, 'utf-8');
+    } catch (error) {
+      const reason = error instanceof Error ? `: ${error.message}` : '';
+      throw new Error(`Cannot read ${path.basename(existingConfigPath)} for --context-profile${reason}`);
+    }
+
+    try {
+      setContextProfileInConfigText(content, this.contextProfile);
+    } catch (error) {
+      const reason = error instanceof Error ? `: ${error.message}` : '';
+      throw new Error(
+        `--context-profile cannot update ${path.basename(existingConfigPath)}${reason}. ` +
+        'Fix the config file, or add the profile line to its context field by hand.'
+      );
+    }
+  }
+
+  private async createConfig(
+    openspecPath: string,
+    extendMode: boolean
+  ): Promise<'created' | 'updated' | 'exists' | 'skipped'> {
     const configPath = path.join(openspecPath, 'config.yaml');
     const configYmlPath = path.join(openspecPath, 'config.yml');
     const configYamlExists = fs.existsSync(configPath);
     const configYmlExists = fs.existsSync(configYmlPath);
 
     if (configYamlExists || configYmlExists) {
-      return 'exists';
+      if (!this.contextProfile) {
+        return 'exists';
+      }
+
+      // Record the profile in the config that is already here. Only the
+      // context node is rewritten; assertContextProfileCanBeApplied has
+      // already proved this parses.
+      const existingPath = configYamlExists ? configPath : configYmlPath;
+      const current = await fs.promises.readFile(existingPath, 'utf-8');
+      const updated = setContextProfileInConfigText(current, this.contextProfile);
+      if (updated === current) {
+        return 'exists';
+      }
+      await FileSystemUtils.writeFile(existingPath, updated);
+      return 'updated';
     }
 
 
     try {
       const yamlContent = serializeConfig({
         schema: DEFAULT_SCHEMA,
-        context: this.languageContext(),
+        context: this.initialContext(),
       });
       FileSystemUtils.assertProjectArtifactPath(path.dirname(openspecPath), configPath);
       await FileSystemUtils.writeFile(configPath, yamlContent);
@@ -1130,6 +1240,10 @@ export class InitCommand {
       if (this.language) {
         const reason = error instanceof Error ? `: ${error.message}` : '';
         throw new Error(`Failed to create openspec/config.yaml for --language${reason}`);
+      }
+      if (this.contextProfile) {
+        const reason = error instanceof Error ? `: ${error.message}` : '';
+        throw new Error(`Failed to create openspec/config.yaml for --context-profile${reason}`);
       }
       return 'skipped';
     }
@@ -1151,7 +1265,7 @@ export class InitCommand {
       removedCommandCount: number;
       removedSkillCount: number;
     },
-    configStatus: 'created' | 'exists' | 'skipped',
+    configStatus: 'created' | 'updated' | 'exists' | 'skipped',
     copilot: {
       write: boolean;
       skippedUndecided: boolean;
@@ -1303,6 +1417,11 @@ export class InitCommand {
     // Config status
     if (configStatus === 'created') {
       console.log(`Config: openspec/config.yaml (schema: ${DEFAULT_SCHEMA})`);
+    } else if (configStatus === 'updated') {
+      // Init normally leaves an existing config alone, so say when it did not.
+      const configYaml = path.join(projectPath, OPENSPEC_DIR_NAME, 'config.yaml');
+      const configName = fs.existsSync(configYaml) ? 'config.yaml' : 'config.yml';
+      console.log(`Config: openspec/${configName} (context profile updated)`);
     } else if (configStatus === 'exists') {
       // Show actual filename (config.yaml or config.yml)
       const configYaml = path.join(projectPath, OPENSPEC_DIR_NAME, 'config.yaml');

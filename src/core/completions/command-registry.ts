@@ -19,6 +19,11 @@ export const COMMAND_REGISTRY: CommandDefinition[] = [
         takesValue: true,
       },
       {
+        name: 'context-profile',
+        description: "Record this repository's MCP context profile in the project context",
+        takesValue: true,
+      },
+      {
         name: 'force',
         description: 'Auto-cleanup legacy files without prompting',
       },

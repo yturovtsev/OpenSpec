@@ -5,6 +5,7 @@ import os from 'os';
 import { InitCommand } from '../../src/core/init.js';
 import { saveGlobalConfig, getGlobalConfig } from '../../src/core/global-config.js';
 import { MAX_CONTEXT_SIZE, readProjectConfig } from '../../src/core/project-config.js';
+import { formatContextProfile } from '../../src/core/context-profile.js';
 import { FileSystemUtils } from '../../src/utils/file-system.js';
 import { ALL_WORKFLOWS } from '../../src/core/profiles.js';
 
@@ -280,6 +281,155 @@ describe('InitCommand', () => {
 
       await expect(initCommand.execute(testDir)).rejects.toThrow(
         'Failed to create openspec/config.yaml for --language: disk full',
+      );
+    });
+
+    it('should record the MCP context profile in a new config', async () => {
+      const initCommand = new InitCommand({
+        tools: 'none',
+        force: true,
+        contextProfile: 'myApp',
+      });
+
+      await initCommand.execute(testDir);
+
+      const context = readProjectConfig(testDir)?.context ?? '';
+      expect(context.trimEnd().split('\n').pop()).toBe(formatContextProfile('myApp'));
+    });
+
+    it('should record the profile after language guidance when both are requested', async () => {
+      const initCommand = new InitCommand({
+        tools: 'none',
+        force: true,
+        language: 'Russian',
+        contextProfile: 'myApp',
+      });
+
+      await initCommand.execute(testDir);
+
+      const context = readProjectConfig(testDir)?.context ?? '';
+      expect(context).toContain('Language: Russian');
+      expect(context.trimEnd().split('\n').pop()).toBe(formatContextProfile('myApp'));
+    });
+
+    it('should add the profile to an existing config without disturbing the rest', async () => {
+      const openspecPath = path.join(testDir, 'openspec');
+      await fs.mkdir(path.join(openspecPath, 'changes', 'archive'), { recursive: true });
+      await fs.mkdir(path.join(openspecPath, 'specs'), { recursive: true });
+      const configPath = path.join(openspecPath, 'config.yaml');
+      const originalConfig = [
+        'schema: spec-driven',
+        '',
+        '# A comment users are expected to keep',
+        'context: |',
+        '  Keep this context exactly.',
+        '',
+        'rules:',
+        '  proposal:',
+        '    - Keep proposals short',
+        '',
+      ].join('\n');
+      await fs.writeFile(configPath, originalConfig, 'utf-8');
+
+      await new InitCommand({ tools: 'none', force: true, contextProfile: 'myApp' }).execute(testDir);
+
+      const updated = await fs.readFile(configPath, 'utf-8');
+      expect(updated).toContain('# A comment users are expected to keep');
+      expect(updated).toContain('    - Keep proposals short');
+
+      const config = readProjectConfig(testDir);
+      expect(config?.context).toContain('Keep this context exactly.');
+      expect(config?.context?.trimEnd().split('\n').pop()).toBe(formatContextProfile('myApp'));
+      expect(config?.rules?.proposal).toEqual(['Keep proposals short']);
+    });
+
+    it('should leave the config untouched when the same profile is re-recorded', async () => {
+      await new InitCommand({ tools: 'none', force: true, contextProfile: 'myApp' }).execute(testDir);
+      const configPath = path.join(testDir, 'openspec', 'config.yaml');
+      const afterFirstRun = await fs.readFile(configPath, 'utf-8');
+
+      await new InitCommand({ tools: 'none', force: true, contextProfile: 'myApp' }).execute(testDir);
+
+      expect(await fs.readFile(configPath, 'utf-8')).toBe(afterFirstRun);
+    });
+
+    it('should replace a previously recorded profile', async () => {
+      await new InitCommand({ tools: 'none', force: true, contextProfile: 'myApp' }).execute(testDir);
+      await new InitCommand({ tools: 'none', force: true, contextProfile: 'otherApp' }).execute(testDir);
+
+      const context = readProjectConfig(testDir)?.context ?? '';
+      expect(context.trimEnd().split('\n').pop()).toBe(formatContextProfile('otherApp'));
+      expect(context).not.toContain('myApp');
+    });
+
+    it('should record the profile in an existing config.yml', async () => {
+      const openspecPath = path.join(testDir, 'openspec');
+      await fs.mkdir(path.join(openspecPath, 'changes', 'archive'), { recursive: true });
+      await fs.mkdir(path.join(openspecPath, 'specs'), { recursive: true });
+      await fs.writeFile(
+        path.join(openspecPath, 'config.yml'),
+        'schema: spec-driven\ncontext: Keep this YAML context.\n',
+        'utf-8',
+      );
+
+      await new InitCommand({ tools: 'none', force: true, contextProfile: 'myApp' }).execute(testDir);
+
+      const context = readProjectConfig(testDir)?.context ?? '';
+      expect(context).toContain('Keep this YAML context.');
+      expect(context.trimEnd().split('\n').pop()).toBe(formatContextProfile('myApp'));
+    });
+
+    it('should reject a malformed config before changing any files', async () => {
+      const openspecPath = path.join(testDir, 'openspec');
+      await fs.mkdir(path.join(openspecPath, 'changes', 'archive'), { recursive: true });
+      await fs.mkdir(path.join(openspecPath, 'specs'), { recursive: true });
+      const configPath = path.join(openspecPath, 'config.yaml');
+      const originalConfig = 'schema: spec-driven\ncontext: [unclosed\n';
+      await fs.writeFile(configPath, originalConfig, 'utf-8');
+
+      const initCommand = new InitCommand({ tools: 'claude', force: true, contextProfile: 'myApp' });
+
+      await expect(initCommand.execute(testDir)).rejects.toThrow(
+        '--context-profile cannot update config.yaml',
+      );
+      expect(await fs.readFile(configPath, 'utf-8')).toBe(originalConfig);
+      expect(await fileExists(path.join(testDir, '.claude'))).toBe(false);
+    });
+
+    it('should reject unsafe profile values before writing files', async () => {
+      const invalidProfiles = [
+        '',
+        '   ',
+        'my\nApp',
+        'my\tApp',
+        'my\u200BApp',
+        'x'.repeat(MAX_CONTEXT_SIZE),
+      ];
+
+      for (const contextProfile of invalidProfiles) {
+        expect(() => new InitCommand({ tools: 'none', contextProfile })).toThrow();
+      }
+      expect(await fileExists(path.join(testDir, 'openspec'))).toBe(false);
+    });
+
+    it('should reject an unwritable profile config before creating other files', async () => {
+      vi.spyOn(FileSystemUtils, 'canWriteFile').mockResolvedValue(false);
+      const initCommand = new InitCommand({ tools: 'claude', force: true, contextProfile: 'myApp' });
+
+      await expect(initCommand.execute(testDir)).rejects.toThrow(
+        'Cannot write openspec/config.yaml for --context-profile',
+      );
+      expect(await fileExists(path.join(testDir, 'openspec'))).toBe(false);
+      expect(await fileExists(path.join(testDir, '.claude'))).toBe(false);
+    });
+
+    it('should surface a profile config write failure', async () => {
+      vi.spyOn(FileSystemUtils, 'canWriteFile').mockResolvedValue(true);
+      vi.spyOn(FileSystemUtils, 'writeFile').mockRejectedValue(new Error('disk full'));
+      const initCommand = new InitCommand({ tools: 'none', force: true, contextProfile: 'myApp' });
+
+      await expect(initCommand.execute(testDir)).rejects.toThrow(
+        'Failed to create openspec/config.yaml for --context-profile: disk full',
       );
     });
 

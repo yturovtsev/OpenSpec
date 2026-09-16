@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { runCLI, cliProjectRoot } from '../helpers/run-cli.js';
 import { isolatedGitEnv } from '../helpers/store-git.js';
 import { AI_TOOLS } from '../../src/core/config.js';
+import { formatContextProfile } from '../../src/core/context-profile.js';
 import { getGlobalDataDir, registerStore } from '../../src/core/index.js';
 import { createOpenSpecRoot } from '../helpers/openspec-fixtures.js';
 
@@ -224,6 +225,41 @@ describe('openspec CLI e2e basics', () => {
       );
       expect(instructions.exitCode).toBe(0);
       expect(JSON.parse(instructions.stdout).context).toContain('Language: French');
+    });
+
+    it('records the MCP context profile and hands it to artifact instructions', async () => {
+      const projectDir = await prepareFixture('tmp-init');
+      const profileProjectDir = path.join(projectDir, '..', 'context-profile-project');
+      await fs.mkdir(profileProjectDir, { recursive: true });
+
+      const result = await runCLI(
+        ['init', '--tools', 'none', '--context-profile', 'myApp', '--no-animation'],
+        { cwd: profileProjectDir },
+      );
+
+      expect(result.exitCode).toBe(0);
+      const configPath = path.join(profileProjectDir, 'openspec', 'config.yaml');
+      const config = await fs.readFile(configPath, 'utf-8');
+      expect(config).toContain(formatContextProfile('myApp'));
+
+      const created = await runCLI(['new', 'change', 'profile-check'], {
+        cwd: profileProjectDir,
+      });
+      expect(created.exitCode).toBe(0);
+      const instructions = await runCLI(
+        ['instructions', 'proposal', '--change', 'profile-check', '--json'],
+        { cwd: profileProjectDir },
+      );
+      expect(instructions.exitCode).toBe(0);
+      expect(JSON.parse(instructions.stdout).context).toContain(formatContextProfile('myApp'));
+
+      // Re-running against the now-existing config must converge, not stack.
+      const rerun = await runCLI(
+        ['init', '--tools', 'none', '--context-profile', 'myApp', '--no-animation'],
+        { cwd: profileProjectDir },
+      );
+      expect(rerun.exitCode).toBe(0);
+      expect(await fs.readFile(configPath, 'utf-8')).toBe(config);
     });
 
     it('initializes with --tools all option', async () => {
