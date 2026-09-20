@@ -21,6 +21,7 @@ import { crushAdapter } from './adapters/crush.js';
 import { cursorAdapter } from './adapters/cursor.js';
 import { factoryAdapter } from './adapters/factory.js';
 import { geminiAdapter } from './adapters/gemini.js';
+import { gigacodeAdapter } from './adapters/gigacode.js';
 import { githubCopilotAdapter } from './adapters/github-copilot.js';
 import { iflowAdapter } from './adapters/iflow.js';
 import { junieAdapter } from './adapters/junie.js';
@@ -60,6 +61,7 @@ export class CommandAdapterRegistry {
     CommandAdapterRegistry.register(cursorAdapter);
     CommandAdapterRegistry.register(factoryAdapter);
     CommandAdapterRegistry.register(geminiAdapter);
+    CommandAdapterRegistry.register(gigacodeAdapter);
     CommandAdapterRegistry.register(githubCopilotAdapter);
     CommandAdapterRegistry.register(iflowAdapter);
     CommandAdapterRegistry.register(junieAdapter);

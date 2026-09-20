@@ -8,6 +8,7 @@ import { MAX_CONTEXT_SIZE, readProjectConfig } from '../../src/core/project-conf
 import { formatContextProfile } from '../../src/core/context-profile.js';
 import { FileSystemUtils } from '../../src/utils/file-system.js';
 import { ALL_WORKFLOWS } from '../../src/core/profiles.js';
+import { AI_TOOLS } from '../../src/core/config.js';
 
 const { confirmMock, showWelcomeScreenMock, searchableMultiSelectMock } = vi.hoisted(() => ({
   confirmMock: vi.fn(),
@@ -2649,6 +2650,189 @@ describe('InitCommand - profile and detection features', () => {
     expect(await fileExists(skillFile)).toBe(true);
   });
 });
+
+describe('InitCommand - GigaCode CLI', () => {
+  let testDir: string;
+  let configTempDir: string;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openspec-init-gigacode-'));
+    originalEnv = { ...process.env };
+    configTempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openspec-config-gigacode-'));
+    process.env.XDG_CONFIG_HOME = configTempDir;
+    process.env.CODEX_HOME = path.join(testDir, 'codex-home');
+    process.env.HOME = path.join(testDir, 'home');
+    process.env.USERPROFILE = path.join(testDir, 'home');
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    confirmMock.mockReset();
+    confirmMock.mockResolvedValue(true);
+    showWelcomeScreenMock.mockClear();
+    searchableMultiSelectMock.mockReset();
+  });
+
+  afterEach(async () => {
+    process.env = originalEnv;
+    await fs.rm(testDir, { recursive: true, force: true });
+    await fs.rm(configTempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('writes both skills and commands under .gigacode', async () => {
+    const initCommand = new InitCommand({ tools: 'gigacode', force: true });
+    await initCommand.execute(testDir);
+
+    expect(
+      await fileExists(
+        path.join(testDir, '.gigacode', 'skills', 'openspec-propose', 'SKILL.md')
+      )
+    ).toBe(true);
+    expect(
+      await fileExists(path.join(testDir, '.gigacode', 'commands', 'opsx-propose.md'))
+    ).toBe(true);
+  });
+
+  it('spells command references by filename, never in the namespaced form', async () => {
+    const initCommand = new InitCommand({ tools: 'gigacode', force: true });
+    await initCommand.execute(testDir);
+
+    const command = await fs.readFile(
+      path.join(testDir, '.gigacode', 'commands', 'opsx-apply.md'),
+      'utf-8'
+    );
+    expect(command).toContain('/opsx-archive');
+    expect(command).not.toContain('/opsx:');
+
+    const skill = await fs.readFile(
+      path.join(testDir, '.gigacode', 'skills', 'openspec-apply-change', 'SKILL.md'),
+      'utf-8'
+    );
+    expect(skill).toContain('/opsx-apply');
+    expect(skill).not.toContain('/opsx:');
+  });
+
+  it('generates a tree that names no other tool directory', async () => {
+    const initCommand = new InitCommand({ tools: 'gigacode', force: true });
+    await initCommand.execute(testDir);
+
+    const gigacodeDir = path.join(testDir, '.gigacode');
+    const files = await collectFiles(gigacodeDir);
+    expect(files.length).toBeGreaterThan(0);
+
+    // Every other tool's base directory, so a copied adapter that kept a
+    // hardcoded path is caught rather than silently shipping another tool's tree.
+    const foreignDirs = AI_TOOLS.map((tool) => tool.skillsDir)
+      .filter((dir): dir is string => Boolean(dir) && dir !== '.gigacode');
+
+    for (const file of files) {
+      const content = await fs.readFile(file, 'utf-8');
+      for (const dir of foreignDirs) {
+        expect(content, `${file} references ${dir}`).not.toContain(`${dir}/`);
+      }
+    }
+  });
+
+  it('prints the getting-started hint in the filename-invoked form', async () => {
+    const initCommand = new InitCommand({ tools: 'claude,gigacode', force: true });
+    await initCommand.execute(testDir);
+
+    const logCalls = (console.log as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .flat()
+      .map(String);
+    const startHints = logCalls.filter((entry) => entry.includes('Start your first change'));
+    const gigacodeHint = startHints.find((entry) => entry.includes('GigaCode CLI'));
+
+    expect(gigacodeHint).toContain('/opsx-propose');
+    expect(gigacodeHint).not.toContain('/opsx:propose');
+  });
+
+  it('is pre-selected for a first-time interactive setup, with nothing on disk', async () => {
+    searchableMultiSelectMock.mockResolvedValue(['gigacode']);
+
+    const initCommand = new InitCommand({ force: true });
+    vi.spyOn(initCommand as any, 'canPromptInteractively').mockReturnValue(true);
+    await initCommand.execute(testDir);
+
+    const gigacode = findChoice('gigacode');
+    expect(gigacode?.preSelected).toBe(true);
+    // Checked but buried is no default at all: it must sort above the pool of
+    // tools that are neither configured nor detected.
+    const { choices } = getChoicesCall();
+    const gigacodeIndex = choices.findIndex((choice) => choice.value === 'gigacode');
+    const firstPlainIndex = choices.findIndex(
+      (choice) => !choice.configured && !choice.detected && choice.value !== 'gigacode'
+    );
+    expect(gigacodeIndex).toBeLessThan(firstPlainIndex);
+  });
+
+  it('is not pre-selected when the project already has OpenSpec', async () => {
+    await fs.mkdir(path.join(testDir, 'openspec'), { recursive: true });
+    searchableMultiSelectMock.mockResolvedValue(['claude']);
+
+    const initCommand = new InitCommand({ force: true });
+    vi.spyOn(initCommand as any, 'canPromptInteractively').mockReturnValue(true);
+    await initCommand.execute(testDir);
+
+    expect(findChoice('gigacode')?.preSelected).toBe(false);
+  });
+
+  it('is not pre-selected when another tool is already configured', async () => {
+    const claudeSkillDir = path.join(testDir, '.claude', 'skills', 'openspec-explore');
+    await fs.mkdir(claudeSkillDir, { recursive: true });
+    await fs.writeFile(path.join(claudeSkillDir, 'SKILL.md'), 'configured');
+    searchableMultiSelectMock.mockResolvedValue(['claude']);
+
+    const initCommand = new InitCommand({ force: true });
+    vi.spyOn(initCommand as any, 'canPromptInteractively').mockReturnValue(true);
+    await initCommand.execute(testDir);
+
+    expect(findChoice('gigacode')?.preSelected).toBe(false);
+    expect(findChoice('claude')?.preSelected).toBe(true);
+  });
+
+  it('creates nothing when the user clears it from the selection', async () => {
+    searchableMultiSelectMock.mockResolvedValue(['claude']);
+
+    const initCommand = new InitCommand({ force: true });
+    vi.spyOn(initCommand as any, 'canPromptInteractively').mockReturnValue(true);
+    await initCommand.execute(testDir);
+
+    expect(findChoice('gigacode')?.preSelected).toBe(true);
+    expect(await directoryExists(path.join(testDir, '.gigacode'))).toBe(false);
+    expect(await directoryExists(path.join(testDir, '.claude'))).toBe(true);
+  });
+});
+
+interface ToolChoice {
+  value: string;
+  configured?: boolean;
+  detected?: boolean;
+  preSelected?: boolean;
+}
+
+function getChoicesCall(): { choices: ToolChoice[] } {
+  expect(searchableMultiSelectMock).toHaveBeenCalledTimes(1);
+  const [config] = searchableMultiSelectMock.mock.calls[0] as [{ choices: ToolChoice[] }];
+  return config;
+}
+
+function findChoice(toolId: string): ToolChoice | undefined {
+  return getChoicesCall().choices.find((choice) => choice.value === toolId);
+}
+
+async function collectFiles(dir: string): Promise<string[]> {
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectFiles(entryPath)));
+    } else {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {

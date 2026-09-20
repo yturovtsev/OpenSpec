@@ -35,6 +35,7 @@ export interface AIToolOption {
   detectionPaths?: string[]; // Override skillsDir for auto-detection; any path existing triggers detection
   setupNote?: string; // Manual setup required before the tool picks up generated files; shown after init/update
   requiresIdeRestart?: boolean; // True when slash commands are loaded by an IDE/editor process (a CLI picks them up immediately, so no restart hint — see #1067)
+  defaultSelected?: boolean; // The expected assistant here: pre-selected on a first-time setup even with no directory on disk, and sorted with the tools shown first so that selection is visible
 }
 
 export const AI_TOOLS: AIToolOption[] = [
@@ -61,6 +62,10 @@ export const AI_TOOLS: AIToolOption[] = [
   { name: 'Cursor', value: 'cursor', available: true, successLabel: 'Cursor', skillsDir: '.cursor', requiresIdeRestart: true },
   { name: 'Factory Droid', value: 'factory', available: true, successLabel: 'Factory Droid', skillsDir: '.factory' },
   { name: 'Gemini CLI', value: 'gemini', available: true, successLabel: 'Gemini CLI', skillsDir: '.gemini' },
+  // The expected assistant in this fork, hence `defaultSelected`. It reads the
+  // same skill and command format as Qwen Code, so its adapter differs from
+  // qwen's only in the directory it writes into.
+  { name: 'GigaCode CLI', value: 'gigacode', available: true, successLabel: 'GigaCode CLI', skillsDir: '.gigacode', defaultSelected: true },
   { name: 'GitHub Copilot', value: 'github-copilot', available: true, successLabel: 'GitHub Copilot', skillsDir: '.github', detectionPaths: ['.github/copilot-instructions.md', '.github/instructions', '.github/workflows/copilot-setup-steps.yml', '.github/prompts', '.github/agents', '.github/skills', '.github/.mcp.json'], requiresIdeRestart: true },
   { name: 'Hermes Agent', value: 'hermes', available: true, successLabel: 'Hermes Agent', skillsDir: '.hermes', detectionPaths: ['.hermes', 'HERMES.md', '.hermes.md'], setupNote: "Hermes only loads skills from ~/.hermes/skills by default. Add this project's .hermes/skills directory to skills.external_dirs in ~/.hermes/config.yaml so Hermes picks up the generated OpenSpec skills." },
   { name: 'iFlow', value: 'iflow', available: true, successLabel: 'iFlow', skillsDir: '.iflow' },

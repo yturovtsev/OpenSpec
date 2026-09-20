@@ -664,21 +664,34 @@ export class InitCommand {
         const status = toolStates.get(toolId);
         const configured = status?.configured ?? false;
         const detected = detectedToolIds.has(toolId);
+        // A tool flagged `defaultSelected` is the assistant this repo expects,
+        // so it starts checked even with no directory on disk. Gated on the
+        // same first-time condition as detection: adding a tool to an already
+        // configured project stays a deliberate act.
+        const defaultSelected =
+          shouldPreselectDetected && (tool?.defaultSelected ?? false) && !configured;
 
         return {
           name: tool?.name || toolId,
           value: toolId,
           configured,
           detected: detected && !configured,
-          preSelected: configured || (shouldPreselectDetected && detected && !configured),
+          defaultSelected,
+          preSelected:
+            configured || (shouldPreselectDetected && detected && !configured) || defaultSelected,
         };
       })
       .sort((a, b) => {
-        // Configured tools first, then detected (not configured), then everything else.
+        // Configured tools first, then detected (not configured), then the
+        // default for this repo, then everything else. Without the third rule a
+        // default with no directory on disk sorts into the general pool, leaving
+        // it checked but far enough down the list to go unread.
         if (a.configured && !b.configured) return -1;
         if (!a.configured && b.configured) return 1;
         if (a.detected && !b.detected) return -1;
         if (!a.detected && b.detected) return 1;
+        if (a.defaultSelected && !b.defaultSelected) return -1;
+        if (!a.defaultSelected && b.defaultSelected) return 1;
         return 0;
       });
 
