@@ -66,6 +66,12 @@ import {
 } from './shared/index.js';
 import { getGlobalConfig, type Delivery, type Profile } from './global-config.js';
 import { getProfileWorkflows, CORE_WORKFLOWS, ALL_WORKFLOWS } from './profiles.js';
+import {
+  initDeclaresProjectWorkflows,
+  PROJECT_WORKFLOWS_CONFIG_BLOCK,
+  resolveInitWorkflows,
+  type EffectiveWorkflows,
+} from './project-workflows.js';
 import { getAvailableTools } from './available-tools.js';
 import { formatOptionalWorkflowsNote } from './onboarding-commands.js';
 import {
@@ -258,7 +264,7 @@ export class InitCommand {
     const canPrompt = this.canPromptInteractively();
     if (canPrompt) {
       const { showWelcomeScreen } = await import('../ui/welcome-screen.js');
-      await showWelcomeScreen(this.getActiveWorkflows(), { animate: this.animation });
+      await showWelcomeScreen(this.getActiveWorkflows(projectPath), { animate: this.animation });
     }
 
     // Get tool states before processing
@@ -466,10 +472,16 @@ export class InitCommand {
    * Resolves the workflows the effective profile installs, so onboarding output
    * only mentions commands that will actually exist.
    */
-  private getActiveWorkflows(): string[] {
-    const globalCfg = getGlobalConfig();
-    const activeProfile: Profile = this.resolveProfileOverride() ?? globalCfg.profile ?? 'core';
-    return [...getProfileWorkflows(activeProfile, globalCfg.workflows)];
+  private getActiveWorkflows(projectPath: string): string[] {
+    return [...this.resolveWorkflows(projectPath).workflows];
+  }
+
+  /**
+   * Fork: a set declared in openspec/config.yaml — or the full set a new
+   * config is about to declare — wins over the global profile.
+   */
+  private resolveWorkflows(projectPath: string): EffectiveWorkflows {
+    return resolveInitWorkflows(projectPath, getGlobalConfig(), this.resolveProfileOverride());
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -954,9 +966,8 @@ export class InitCommand {
 
     // Read global config for profile and delivery settings (use --profile override if set)
     const globalConfig = getGlobalConfig();
-    const profile: Profile = this.resolveProfileOverride() ?? globalConfig.profile ?? 'core';
     const delivery: Delivery = globalConfig.delivery ?? 'both';
-    const workflows = getProfileWorkflows(profile, globalConfig.workflows);
+    const workflows = this.getActiveWorkflows(projectPath);
 
     // Get skill and command templates filtered by profile workflows
     const deliveryIncludesCommands = delivery !== 'skills';
@@ -1242,10 +1253,13 @@ export class InitCommand {
 
 
     try {
-      const yamlContent = serializeConfig({
+      let yamlContent = serializeConfig({
         schema: DEFAULT_SCHEMA,
         context: this.initialContext(),
       });
+      if (initDeclaresProjectWorkflows(path.dirname(openspecPath), this.resolveProfileOverride())) {
+        yamlContent += PROJECT_WORKFLOWS_CONFIG_BLOCK;
+      }
       FileSystemUtils.assertProjectArtifactPath(path.dirname(openspecPath), configPath);
       await FileSystemUtils.writeFile(configPath, yamlContent);
       return 'created';
@@ -1307,9 +1321,8 @@ export class InitCommand {
     const successfulTools = [...results.createdTools, ...results.refreshedTools];
     if (successfulTools.length > 0) {
       const globalConfig = getGlobalConfig();
-      const profile: Profile = (this.profileOverride as Profile) ?? globalConfig.profile ?? 'core';
       const delivery: Delivery = globalConfig.delivery ?? 'both';
-      const workflows = getProfileWorkflows(profile, globalConfig.workflows);
+      const workflows = this.getActiveWorkflows(projectPath);
       const usesGlobalSkillTarget = successfulTools.some((tool) => tool.isGlobalSkillTarget);
 
       if (!usesGlobalSkillTarget) {
@@ -1446,7 +1459,7 @@ export class InitCommand {
     }
 
     // Getting started (task 7.6: show propose if in profile)
-    const activeWorkflows = this.getActiveWorkflows();
+    const activeWorkflows = this.getActiveWorkflows(projectPath);
     // When no tool got /opsx:* commands, point at the skill instead of a
     // command that does not exist.
     const activeDelivery: Delivery = getGlobalConfig().delivery ?? 'both';
@@ -1542,7 +1555,11 @@ export class InitCommand {
     // a workflow surface at all (no tools selected, or none that could take
     // one) — there, adding workflows writes nothing, so naming them would
     // point at the wrong problem.
-    if (advertisedAnInvocation && (commandsGenerated || skillsGenerated)) {
+    if (
+      advertisedAnInvocation &&
+      (commandsGenerated || skillsGenerated) &&
+      this.resolveWorkflows(projectPath).source === 'global'
+    ) {
       const optionalWorkflowsNote = formatOptionalWorkflowsNote(activeWorkflows);
       if (optionalWorkflowsNote) {
         console.log();

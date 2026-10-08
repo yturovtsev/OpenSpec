@@ -34,6 +34,10 @@ export default defineConfig({
     env: {
       OPENSPEC_TELEMETRY: '0',
       DO_NOT_TRACK: '1',
+      // Fork: keep `openspec init` from pinning `workflows: all` in new
+      // projects, so upstream tests keep exercising the global-profile path.
+      // test/core/project-workflows.test.ts turns it back on.
+      OPENSPEC_INIT_PROJECT_WORKFLOWS: '0',
     },
     // Tests rely on per-file process isolation (e.g., `process.cwd()` assumptions).
     pool: 'forks',

@@ -46,6 +46,7 @@ import {
 import { isInteractive } from '../utils/interactive.js';
 import { getGlobalConfig, type Delivery, type Profile } from './global-config.js';
 import { getProfileWorkflows, ALL_WORKFLOWS, CORE_WORKFLOWS } from './profiles.js';
+import { resolveEffectiveWorkflows } from './project-workflows.js';
 import { formatOptionalWorkflowsNote, getOnboardingCommands } from './onboarding-commands.js';
 import { getAvailableTools } from './available-tools.js';
 import {
@@ -160,7 +161,9 @@ export class UpdateCommand {
     const globalConfig = getGlobalConfig();
     const profile = globalConfig.profile ?? 'core';
     const delivery: Delivery = globalConfig.delivery ?? 'both';
-    const profileWorkflows = getProfileWorkflows(profile, globalConfig.workflows);
+    // Fork: a set declared in openspec/config.yaml wins over the global profile.
+    const effectiveWorkflows = resolveEffectiveWorkflows(resolvedProjectPath, globalConfig);
+    const profileWorkflows = effectiveWorkflows.workflows;
     const desiredWorkflows = profileWorkflows.filter((workflow): workflow is (typeof ALL_WORKFLOWS)[number] =>
       (ALL_WORKFLOWS as readonly string[]).includes(workflow)
     );
@@ -250,7 +253,10 @@ export class UpdateCommand {
 
       // Still check for new tool directories and extra workflows
       this.detectNewTools(resolvedProjectPath, configuredTools);
-      this.displayProfileNotes(resolvedProjectPath, configuredTools, desiredWorkflows, profile, delivery);
+      // Profile notes point at `openspec config profile`, which does not govern a project-declared set.
+      if (effectiveWorkflows.source === 'global') {
+        this.displayProfileNotes(resolvedProjectPath, configuredTools, desiredWorkflows, profile, delivery);
+      }
       this.displaySetupNotes(configuredTools);
       return;
     }
@@ -489,7 +495,9 @@ export class UpdateCommand {
     this.detectNewTools(resolvedProjectPath, configuredAndNewTools);
 
     // 14. Display the profile notes
-    this.displayProfileNotes(resolvedProjectPath, configuredAndNewTools, desiredWorkflows, profile, delivery);
+    if (effectiveWorkflows.source === 'global') {
+      this.displayProfileNotes(resolvedProjectPath, configuredAndNewTools, desiredWorkflows, profile, delivery);
+    }
     this.displaySetupNotes(configuredAndNewTools);
 
     // 15. List affected tools
