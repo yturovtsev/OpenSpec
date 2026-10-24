@@ -344,6 +344,8 @@ Path: /path/to/project/openspec/schemas/my-workflow
 
 > **Note:** OpenSpec also supports user-level schemas at `~/.local/share/openspec/schemas/` for sharing across projects, but project-level schemas in `openspec/schemas/` are recommended since they're version-controlled with your code.
 
+> **Note:** A standalone `openspec` executable reads its built-in schemas from the `schemas/` directory next to the executable. Ship them there rather than embedding them in the binary.
+
 ---
 
 ## Examples

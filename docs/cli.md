@@ -1126,7 +1126,7 @@ spec-driven resolves from: package
 
 1. Project: `openspec/schemas/<name>/`
 2. User: `~/.local/share/openspec/schemas/<name>/`
-3. Package: Built-in schemas
+3. Package: Built-in schemas (a standalone `openspec` executable reads them from `schemas/` next to the executable)
 
 ---
 

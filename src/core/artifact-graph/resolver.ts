@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getGlobalDataDir } from '../global-config.js';
 import { FileSystemUtils } from '../../utils/file-system.js';
+import { selectBuiltInSchemasDir } from './standalone-schemas.js';
 import { parseSchema, SchemaValidationError } from './schema.js';
 import type { SchemaYaml } from './types.js';
 
@@ -22,12 +23,19 @@ export class SchemaLoadError extends Error {
 
 /**
  * Gets the package's built-in schemas directory path.
- * Uses import.meta.url to resolve relative to the current module.
+ * Uses import.meta.url to resolve relative to the current module, falling back
+ * to schemas/ next to a standalone executable (see standalone-schemas.ts).
  */
 export function getPackageSchemasDir(): string {
-  const currentFile = fileURLToPath(import.meta.url);
-  // Navigate from dist/core/artifact-graph/ to package root's schemas/
-  return path.join(path.dirname(currentFile), '..', '..', '..', 'schemas');
+  let packagedDir: string | null;
+  try {
+    const currentFile = fileURLToPath(import.meta.url);
+    // Navigate from dist/core/artifact-graph/ to package root's schemas/
+    packagedDir = path.join(path.dirname(currentFile), '..', '..', '..', 'schemas');
+  } catch {
+    packagedDir = null;
+  }
+  return selectBuiltInSchemasDir(packagedDir, process.execPath);
 }
 
 /**
